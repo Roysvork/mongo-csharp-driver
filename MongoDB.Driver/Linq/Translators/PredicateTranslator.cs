@@ -157,7 +157,14 @@ namespace MongoDB.Driver.Linq
 
         private IMongoQuery BuildArrayLengthQuery(Expression variableExpression, ExpressionType operatorType, ConstantExpression constantExpression)
         {
-            if (operatorType != ExpressionType.Equal && operatorType != ExpressionType.NotEqual)
+            var allowedOperators = new[]
+                {
+                    ExpressionType.Equal, ExpressionType.NotEqual, ExpressionType.GreaterThan,
+                    ExpressionType.GreaterThanOrEqual, ExpressionType.LessThan,
+                    ExpressionType.LessThanOrEqual
+                };
+
+            if (!allowedOperators.Contains(operatorType))
             {
                 return null;
             }
@@ -197,22 +204,38 @@ namespace MongoDB.Driver.Linq
                 if (arguments.Length == 1)
                 {
                     var arrayMemberExpression = methodCallExpression.Arguments[0] as MemberExpression;
-                    if (arrayMemberExpression != null && arrayMemberExpression.Type != typeof(string))
+
+                    if (arrayMemberExpression != null)
                     {
-                        serializationInfo = _serializationInfoHelper.GetSerializationInfo(arrayMemberExpression);
+                        if (arrayMemberExpression.Type != typeof(string))
+                        {
+                            serializationInfo = _serializationInfoHelper.GetSerializationInfo(arrayMemberExpression);
+                        }
+                    }
+                    else
+                    {
+                        serializationInfo =
+                            _serializationInfoHelper.GetSerializationInfo(methodCallExpression.Arguments[0]);
                     }
                 }
             }
 
             if (serializationInfo != null)
             {
-                if (operatorType == ExpressionType.Equal)
+                switch (operatorType)
                 {
-                    return Query.Size(serializationInfo.ElementName, value);
-                }
-                else
-                {
-                    return Query.Not(Query.Size(serializationInfo.ElementName, value));
+                    case ExpressionType.Equal:
+                        return Query.Size(serializationInfo.ElementName, value);
+                    case ExpressionType.NotEqual:
+                        return Query.Not(Query.Size(serializationInfo.ElementName, value));
+                    case ExpressionType.GreaterThan:
+                        return Query.SizeGreaterThan(serializationInfo.ElementName, value);
+                    case ExpressionType.GreaterThanOrEqual:
+                        return Query.SizeGreaterThanOrEqual(serializationInfo.ElementName, value);
+                    case ExpressionType.LessThan:
+                        return Query.Not(Query.SizeGreaterThanOrEqual(serializationInfo.ElementName, value));
+                    case ExpressionType.LessThanOrEqual:
+                        return Query.Not(Query.SizeGreaterThan(serializationInfo.ElementName, value));
                 }
             }
 
@@ -341,6 +364,18 @@ namespace MongoDB.Driver.Linq
             }
             else
             {
+                var methodCallExpression = variableExpression as MethodCallExpression;
+                if (methodCallExpression != null && value is bool)
+                {
+                    var boolvalue = (bool)value;
+                    var methodresult = this.BuildMethodCallQuery(methodCallExpression);
+
+                    var evaluatesAsEquals = (boolvalue && operatorType == ExpressionType.Equal)
+                                            || (!boolvalue && operatorType == ExpressionType.NotEqual);
+
+                    return evaluatesAsEquals ? methodresult : Query.Not(methodresult);
+                }
+
                 serializationInfo = _serializationInfoHelper.GetSerializationInfo(variableExpression);
             }
 
